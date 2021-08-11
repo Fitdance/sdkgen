@@ -382,10 +382,10 @@ export function start(port: number = 8000) {
                                         type: "Fatal",
                                         message: err.toString()
                                     };
-                                    setTimeout(() => captureError(err, req, {
-                                        call
-                                    }), 1);
                                 }
+                                setTimeout(() => captureError(err, req, {
+                                    call
+                                }), 1);
                             }
                             call.running = false;
                             const deltaTime = process.hrtime(startTime);
