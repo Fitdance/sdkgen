@@ -9,7 +9,6 @@ import http from "http";
 import crypto from "crypto";
 import os from "os";
 import url from "url";
-import Raven from "raven";
 
 END
     else
@@ -18,7 +17,6 @@ import * as http from "http";
 import * as crypto from "crypto";
 import * as os from "os";
 import * as url from "url";
-const Raven = require("raven");
 
 END
     end
@@ -434,15 +432,6 @@ export function start(port: number = 8000) {
 
     if ((server as any).keepAliveTimeout)
         (server as any).keepAliveTimeout = 0;
-
-    if (!process.env.TEST && !process.env.DEBUGGING && sentryUrl) {
-        Raven.config(sentryUrl).install();
-        captureError = (e, req, extra) => Raven.captureException(e, {
-            req,
-            extra,
-            fingerprint: [(e.message || e.toString()).replace(/[0-9]+/g, "X").replace(/"[^"]*"/g, "X")]
-        });
-    }
 
     server.listen(port, () => {
         const addr = server.address();
