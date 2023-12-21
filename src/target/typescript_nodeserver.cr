@@ -3,6 +3,13 @@ require "./target"
 
 class TypeScriptServerTarget < Target
   def gen
+    if @ast.options.useDatadog
+      @io << <<-END
+import tracer from "dd-trace";
+
+END
+    end
+
     if @ast.options.syntheticDefaultImports
       @io << <<-END
 import http from "http";
@@ -51,6 +58,7 @@ interface DBApiCall {
     ok: boolean
     result: any
     error: {type: string, message: string} | null
+    userId?: string | number
 }
 
 END
@@ -264,7 +272,7 @@ export function start(port: number = 8000) {
 
         let body = "";
         req.on("data", (chunk: any) => body += chunk.toString());
-        req.on("end", () => {
+        req.on("end", #{@ast.options.useDatadog ? "tracer.scope().bind( async ()" : "()"} => {
             if (req.method === "OPTIONS") {
                 res.writeHead(200);
                 res.end();
@@ -274,13 +282,13 @@ export function start(port: number = 8000) {
             const signature = req.method! + url.parse(req.url || "").pathname;
             if (httpHandlers[signature]) {
                 console.log(`${toDateTimeString(new Date())} http ${signature}`);
-                httpHandlers[signature](body, res, req);
+                #{@ast.options.useDatadog ? "tracer.trace('sdkgen.http_handler', () => httpHandlers[signature](body, res, req))" : "httpHandlers[signature](body, res, req);"}
                 return;
             }
             for (let target in httpHandlers) {
                 if (("prefix " + signature).startsWith(target)) {
                     console.log(`${toDateTimeString(new Date())} http ${target}`);
-                    httpHandlers[target](body, res, req);
+                    #{@ast.options.useDatadog ? "tracer.trace('sdkgen.http_prefix_handler', () => httpHandlers[target](body, res, req))" : "httpHandlers[target](body, res, req);"}
                     return;
                 }
             }
@@ -305,7 +313,7 @@ export function start(port: number = 8000) {
                     break;
                 }
                 case "POST": {
-                    (async () => {
+                    #{@ast.options.useDatadog ? "tracer.trace('sdkgen.http_call', async () => {" : "(async () => {"}
                         const request = JSON.parse(body);
                         request.device.ip = ip;
                         request.device.lastActiveAt = new Date();
@@ -323,7 +331,7 @@ export function start(port: number = 8000) {
                         if (!context.device.id)
                             context.device.id = crypto.randomBytes(20).toString("hex");
 
-                        await hook.onDevice(context.device.id, deviceInfo);
+                        await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.on_device', () => " : ""}hook.onDevice(context.device.id, deviceInfo)#{@ast.options.useDatadog ? ")" : ""};
 
                         const executionId = crypto.randomBytes(20).toString("hex");
 
@@ -347,8 +355,36 @@ export function start(port: number = 8000) {
                         if (clearForLogging[call.name])
                             clearForLogging[call.name](call);
 
+
+END
+
+    if @ast.options.useDatadog
+      @io << <<-END
+                        const span = tracer.scope().active();
+                        if (!!call.id) span?.setTag('sdkgen.call.id', call.id);
+                        if (!!call.name) span?.setTag('sdkgen.call.name', call.name);
+                        if (!!call.device?.id) span?.setTag('sdkgen.call.deviceId', call.device.id);
+                        if (!!call.args && typeof call.args === 'object' && Object.keys(call.args).length > 0) span?.setTag('sdkgen.call.args', call.args);
+
+END
+    end
+    @io << <<-END
+
                         try {
-                            call = await hook.onReceiveCall(call) || call;
+                            call = (await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.on_receive_call', () => " : ""}hook.onReceiveCall(call)#{@ast.options.useDatadog ? ")" : ""}) || call;
+
+END
+    if @ast.options.useDatadog
+      @io << <<-END
+
+                            if (!!call.userId) {
+                                span?.setTag('sdkgen.call.userId', call.userId.toString());
+                                span?.setBaggageItem('userId', call.userId.toString());
+                            }
+
+END
+    end
+    @io << <<-END
                         } catch (e) {
                             call.ok = false;
                             call.error = {
@@ -359,7 +395,25 @@ export function start(port: number = 8000) {
                         }
 
                         if (call.running) {
+                        #{@ast.options.useDatadog ? "await tracer.trace('sdkgen.fn', async () => {" : ""}
                             try {
+
+END
+    if @ast.options.useDatadog
+        @io << <<-END
+                                const span = tracer.scope().active();
+                                span?.setTag('resource.name', call.name);
+
+                                if (!!call.id) span?.setTag('sdkgen.call.id', call.id);
+                                if (!!call.name) span?.setTag('sdkgen.call.name', call.name);
+                                if (!!call.device?.id) span?.setTag('sdkgen.call.deviceId', call.device.id);
+                                if (!!call.args && typeof call.args === 'object' && Object.keys(call.args).length > 0) span?.setTag('sdkgen.call.args', call.args);
+                                if (!!call.userId) span?.setTag('sdkgen.call.userId', call.userId.toString());
+
+END
+    end
+
+    @io << <<-END
                                 const func = fnExec[request.name];
                                 if (func) {
                                     call.result = await func(context, request.args);
@@ -370,26 +424,40 @@ export function start(port: number = 8000) {
                             } catch (err) {
                                 console.error(err);
                                 call.ok = false;
-                                if (#{@ast.errors.to_json}.includes(err._type)) {
+                                if (#{@ast.errors.to_json}.includes(err?._type)) {
                                     call.error = {
                                         type: err._type,
                                         message: err._msg
                                     };
+
+END
+    if @ast.options.useDatadog
+        @io << <<-END
+                                    if (err._type === 'NotLoggedIn') {
+                                        tracer.scope().active().addTags({
+                                            error: null,
+                                            issue: null,
+                                        });
+                                    }
+
+END
+    end
+    @io << <<-END
                                 } else {
                                     call.error = {
                                         type: "Fatal",
-                                        message: err.toString()
+                                        message: err?.toString()
                                     };
                                 }
                                 setTimeout(() => captureError(err, req, {
                                     call
                                 }), 1);
-                            }
+                            }#{@ast.options.useDatadog ? "});" : ""}                         
                             call.running = false;
                             const deltaTime = process.hrtime(startTime);
                             call.duration = deltaTime[0] + deltaTime[1] * 1e-9;
 
-                            await hook.afterProcessCall(call);
+                            await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.after_process_call', () => " : ""}hook.afterProcessCall(call)#{@ast.options.useDatadog ? ")" : ""};
                         }
 
                         const response = {
@@ -414,7 +482,7 @@ export function start(port: number = 8000) {
                             `${call.id} [${call.duration.toFixed(6)}s] ` +
                             `${call.name}() -> ${call.ok ? "OK" : call.error ? call.error.type : "???"}`
                         );
-                    })().catch(err => {
+                    })#{@ast.options.useDatadog ? "" : "()"}.catch(err => {
                         console.error(err);
                         if (!res.headersSent)
                             res.writeHead(500);
@@ -427,7 +495,19 @@ export function start(port: number = 8000) {
                     res.end();
                 }
             }
-        });
+
+
+END
+    if @ast.options.useDatadog
+      @io << <<-END
+            try {
+                tracer.scope().active()?.setTag('resource.name', `${req.method} ${new URL(req.url ?? "/", `http://${req.headers.host ?? 'localhost'}`).pathname}`);
+            } catch {}
+
+END
+    end
+    @io << <<-END
+        })#{@ast.options.useDatadog ? ")" : ""};
     });
 
     if ((server as any).keepAliveTimeout)
