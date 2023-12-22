@@ -40,6 +40,7 @@ interface DBDevice {
     screen: {width: number, height: number}
     version: string
     language: string
+    userId?: string
     lastActiveAt?: Date
     push?: string
     timezone?: string | null
@@ -58,7 +59,7 @@ interface DBApiCall {
     ok: boolean
     result: any
     error: {type: string, message: string} | null
-    userId?: string | number
+    userId?: string
 }
 
 END
@@ -185,6 +186,7 @@ END
 
     @ast.errors.each do |error|
       @io << "export class #{error} extends Error {\n"
+      @io << ident "name = \"#{error}Error\";\n"
       @io << ident "_type = #{error.inspect};\n"
       @io << ident "constructor(public _msg: string) {\n"
       @io << ident ident "super(_msg ? \"#{error}: \" + _msg : #{error.inspect});\n"
@@ -265,9 +267,9 @@ export let server: http.Server;
 
 export const hook: {
     onHealthCheck: () => Promise<boolean>
-    onDevice: (id: string, deviceInfo: any) => Promise<void>
-    onReceiveCall: (call: DBApiCall) => Promise<DBApiCall | void>
-    afterProcessCall: (call: DBApiCall) => Promise<void>
+    onDevice: (ctx: Context, id: string, deviceInfo: DBDevice) => Promise<void>
+    onReceiveCall: (ctx: Context, call: DBApiCall) => Promise<DBApiCall | void>
+    afterProcessCall: (ctx: Context, call: DBApiCall) => Promise<void>
     setCache: (cacheKey: string, expirationDate: Date | null, version: number, decodedKey: string, fnName: string, ret: any) => Promise<void>
     getCache: (cacheKey: string, version: number) => Promise<{expirationDate: Date | null, ret: any} | null>
 } = {
@@ -371,9 +373,11 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
                         if (!context.device.id)
                             loggerMeta.sdkgen.call.deviceId = context.device.id = crypto.randomBytes(20).toString("hex");
 
-                        await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.on_device', () => " : ""}hook.onDevice(context.device.id, deviceInfo)#{@ast.options.useDatadog ? ")" : ""};
+                        await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.on_device', () => " : ""}hook.onDevice(context, context.device.id, context.device)#{@ast.options.useDatadog ? ")" : ""};
 
                         const executionId = crypto.randomBytes(20).toString("hex");
+                        
+                        let userId;
 
                         let call: DBApiCall = {
                             id: `${request.id}-${context.device.id}`,
@@ -387,7 +391,13 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
                             host: os.hostname(),
                             ok: true,
                             result: null as any,
-                            error: null as {type: string, message: string}|null
+                            error: null as {type: string, message: string}|null,
+                            get userId() {
+                                return userId?.toString();
+                            },
+                            set userId(val) {
+                                userId = val?.toString();
+                            }
                         };
 
                         context.call = call;
@@ -410,7 +420,7 @@ END
     @io << <<-END
 
                         try {
-                            call = (await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.on_receive_call', () => " : ""}hook.onReceiveCall(call)#{@ast.options.useDatadog ? ")" : ""}) || call;
+                            call = (await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.on_receive_call', () => " : ""}hook.onReceiveCall(context, call)#{@ast.options.useDatadog ? ")" : ""}) || call;
 
 END
     if @ast.options.useDatadog
@@ -497,7 +507,7 @@ END
                             const deltaTime = process.hrtime(startTime);
                             call.duration = deltaTime[0] + deltaTime[1] * 1e-9;
 
-                            await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.after_process_call', () => " : ""}hook.afterProcessCall(call)#{@ast.options.useDatadog ? ")" : ""};
+                            await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.after_process_call', () => " : ""}hook.afterProcessCall(context, call)#{@ast.options.useDatadog ? ")" : ""};
                         }
 
                         const response = {
