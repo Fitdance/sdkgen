@@ -147,7 +147,7 @@ END
       @io << ident ident ident ident "cacheKey = crypto.createHash(\"sha256\").update(JSON.stringify(key)+ \"-#{op.pretty_name}\").digest(\"hex\").substr(0, 100); decodedKey = JSON.stringify(key); cacheExpirationSeconds = expirationSeconds; cacheVersion = version;\n"
       @io << ident ident ident ident "const cache = await hook.getCache(cacheKey, version);\n"
       @io << ident ident ident ident "if (cache && (!cache.expirationDate || cache.expirationDate > new Date())) return cache.ret;\n"
-      @io << ident ident ident "} catch(e) {console.log(JSON.stringify(e));}\n"
+      @io << ident ident ident "} catch(e) {ctx.logger.debug(JSON.stringify(e));}\n"
       @io << ident ident "}\n"
       @io << ident ident "const ret = await fn.#{op.pretty_name}(#{(["ctx"] + op.args.map(&.name)).join(", ")});\n"
       @io << ident ident op.return_type.typescript_check_decoded("ret", "\"#{op.pretty_name}.ret\"")
@@ -216,10 +216,36 @@ export function handleHttpPrefix(method: "GET" | "POST" | "PUT" | "DELETE", path
 export interface Context {
     call: DBApiCall;
     device: DBDevice;
+    logger: Logger;
     req: http.IncomingMessage;
     startTime: Date;
     staging: boolean;
 }
+
+export type Logger = {
+    [K in "warn" | "info" | "debug"]: (
+        message: string,
+        metadata?: object | null
+    ) => void;
+} & {
+    error: (message: string, metadata?: object | null, error?: unknown) => void;
+    child?: (meta: object) => Logger;
+};
+
+function fmtMsg(msg: string, meta?: any) {
+    if (!meta) meta = {};
+    if (typeof meta !== "object") meta = { meta: meta.toString() };
+    return `${msg} ${Object.entries(meta)
+        .map(([k, v]) => `${k.toString()}=${v?.toString() ?? "?"}`)
+        .join(",")}`;
+}
+
+const defaultLogger: Logger = {
+    error: (msg, meta) => console.error(fmtMsg(msg, meta)),
+    warn: (msg, meta) => console.warn(fmtMsg(msg, meta)),
+    info: (msg, meta) => console.info(fmtMsg(msg, meta)),
+    debug: (msg, meta) => console.debug(fmtMsg(msg, meta)),
+};
 
 function sleep(ms: number) {
     return new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -253,15 +279,15 @@ export const hook: {
     getCache: async () => null
 };
 
-export function start(port: number = 8000) {
+export function start(port: number = 8000, logger: Logger = defaultLogger) {
     if (server) return;
     server = http.createServer((req, res) => {
         req.on("error", (err) => {
-            console.error(err);
+            logger.error("Error", null, err);
         });
 
         res.on("error", (err) => {
-            console.error(err);
+            logger.error("Error", null, err);
         });
 
         res.setHeader("Access-Control-Allow-Origin", "*");
@@ -281,13 +307,13 @@ export function start(port: number = 8000) {
             const ip = getIp(req) || "";
             const signature = req.method! + url.parse(req.url || "").pathname;
             if (httpHandlers[signature]) {
-                console.log(`${toDateTimeString(new Date())} http ${signature}`);
+                logger.info(`${toDateTimeString(new Date())} http ${signature}`);
                 #{@ast.options.useDatadog ? "tracer.trace('sdkgen.http_handler', () => httpHandlers[signature](body, res, req))" : "httpHandlers[signature](body, res, req);"}
                 return;
             }
             for (let target in httpHandlers) {
                 if (("prefix " + signature).startsWith(target)) {
-                    console.log(`${toDateTimeString(new Date())} http ${target}`);
+                    logger.info(`${toDateTimeString(new Date())} http ${target}`);
                     #{@ast.options.useDatadog ? "tracer.trace('sdkgen.http_prefix_handler', () => httpHandlers[target](body, res, req))" : "httpHandlers[target](body, res, req);"}
                     return;
                 }
@@ -305,7 +331,7 @@ export function start(port: number = 8000) {
                         res.write(JSON.stringify({ok}));
                         res.end();
                     }, error => {
-                        console.error(error);
+                        logger.error("Error", null, error);
                         res.writeHead(500);
                         res.write(JSON.stringify({ok: false}));
                         res.end();
@@ -315,21 +341,35 @@ export function start(port: number = 8000) {
                 case "POST": {
                     #{@ast.options.useDatadog ? "tracer.trace('sdkgen.http_call', async () => {" : "(async () => {"}
                         const request = JSON.parse(body);
+
+                        const loggerMeta: any = {
+                            inContext: true,
+                            sdkgen: {
+                                call: {
+                                    id: request.id,
+                                    name: request.name,
+                                    deviceId: request.device?.id,
+                                    args: request.args,
+                                },
+                            },
+                        };
+
+                        const callLogger = logger.child?.(loggerMeta) ?? logger;
+
                         request.device.ip = ip;
                         request.device.lastActiveAt = new Date();
                         const context: Context = {
                             call: null as any,
                             req: req,
                             device: request.device,
+                            logger: callLogger,
                             startTime: new Date,
                             staging: request.staging || false
                         };
                         const startTime = process.hrtime();
 
-                        const {id, ...deviceInfo} = context.device;
-
                         if (!context.device.id)
-                            context.device.id = crypto.randomBytes(20).toString("hex");
+                            loggerMeta.sdkgen.call.deviceId = context.device.id = crypto.randomBytes(20).toString("hex");
 
                         await #{@ast.options.useDatadog ? "tracer.trace('sdkgen.on_device', () => " : ""}hook.onDevice(context.device.id, deviceInfo)#{@ast.options.useDatadog ? ")" : ""};
 
@@ -355,7 +395,6 @@ export function start(port: number = 8000) {
                         if (clearForLogging[call.name])
                             clearForLogging[call.name](call);
 
-
 END
 
     if @ast.options.useDatadog
@@ -378,6 +417,7 @@ END
       @io << <<-END
 
                             if (!!call.userId) {
+                                loggerMeta.sdkgen.call.userId = call.userId;
                                 span?.setTag('sdkgen.call.userId', call.userId.toString());
                                 span?.setBaggageItem('userId', call.userId.toString());
                             }
@@ -418,11 +458,11 @@ END
                                 if (func) {
                                     call.result = await func(context, request.args);
                                 } else {
-                                    console.error(JSON.stringify(Object.keys(fnExec)));
+                                    callLogger.error("Function does not exist: " + request.name, { knownFunctions: Object.keys(fnExec) });
                                     throw "Function does not exist: " + request.name;
                                 }
                             } catch (err) {
-                                console.error(err);
+                                callLogger.error(`Error on ${request.name}`, null, err);
                                 call.ok = false;
                                 if (#{@ast.errors.to_json}.includes(err?._type)) {
                                     call.error = {
@@ -477,13 +517,13 @@ END
                         res.write(JSON.stringify(response));
                         res.end();
 
-                        console.log(
+                        callLogger.info(
                             `${toDateTimeString(new Date())} ` +
                             `${call.id} [${call.duration.toFixed(6)}s] ` +
                             `${call.name}() -> ${call.ok ? "OK" : call.error ? call.error.type : "???"}`
                         );
                     })#{@ast.options.useDatadog ? "" : "()"}.catch(err => {
-                        console.error(err);
+                        logger.error("Error", null, err);
                         if (!res.headersSent)
                             res.writeHead(500);
                         res.end();
@@ -516,7 +556,7 @@ END
     server.listen(port, () => {
         const addr = server.address();
         const addrString = typeof addr === "string" ? addr : addr ? `${addr.address}:${addr.port}` : "???";
-        console.log(`Listening on ${addrString}`);
+        logger.info(`Listening on ${addrString}`);
     });
 }
 
