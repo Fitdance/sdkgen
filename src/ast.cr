@@ -119,6 +119,7 @@ module AST
     property strict = false
     property syntheticDefaultImports = true
     property retryRequest = true
+    property useDatadog = false
   end
 
   class Field

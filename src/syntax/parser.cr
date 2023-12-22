@@ -259,6 +259,14 @@ class Parser
         options.syntheticDefaultImports = false
       end
       read_next_token
+    when "useDatadog"
+      case token = multi_expect(TrueKeywordToken, FalseKeywordToken)
+      when TrueKeywordToken
+        options.useDatadog = true
+      when FalseKeywordToken
+        options.useDatadog = false
+      end
+      read_next_token
     else
       raise ParserException.new("Unknown option $#{var.name} at #{var.location}")
     end
