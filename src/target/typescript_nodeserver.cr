@@ -224,7 +224,7 @@ export interface Context {
     startTime: Date;
     staging: boolean;
 }
-    
+
 export interface LogMethod {
   (message: string, meta?: LogMeta): void;
   (log: { message: string } & LogMeta): void;
@@ -258,12 +258,13 @@ function fmtMsg(msg: string, meta?: any) {
         .join(",")}`;
 }
 
-const defaultLogger: Logger = {
-    error: (msg, meta) => console.error(fmtMsg(msg, meta)),
+const defaultLogger = {
+    crit: (msg, meta, _) => console.error(fmtMsg(msg, meta)),
+    error: (msg, meta, _) => console.error(fmtMsg(msg, meta)),
     warn: (msg, meta) => console.warn(fmtMsg(msg, meta)),
     info: (msg, meta) => console.info(fmtMsg(msg, meta)),
     debug: (msg, meta) => console.debug(fmtMsg(msg, meta)),
-};
+} as Logger;
 
 function sleep(ms: number) {
     return new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -301,11 +302,11 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
     if (server) return;
     server = http.createServer((req, res) => {
         req.on("error", (err) => {
-            logger.error("Error", null, err);
+            logger.error("Error", err);
         });
 
         res.on("error", (err) => {
-            logger.error("Error", null, err);
+            logger.error("Error", err);
         });
 
         res.setHeader("Access-Control-Allow-Origin", "*");
@@ -349,7 +350,7 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
                         res.write(JSON.stringify({ok}));
                         res.end();
                     }, error => {
-                        logger.error("Error", null, error);
+                        logger.error("Error", error);
                         res.writeHead(500);
                         res.write(JSON.stringify({ok: false}));
                         res.end();
@@ -488,7 +489,7 @@ END
                                     throw "Function does not exist: " + request.name;
                                 }
                             } catch (err) {
-                                callLogger.error(`Error on ${request.name}`, null, err);
+                                callLogger.error(`Error on ${request.name}`, err);
                                 call.ok = false;
                                 if (#{@ast.errors.to_json}.includes(err?._type)) {
                                     call.error = {
@@ -549,7 +550,7 @@ END
                             `${call.name}() -> ${call.ok ? "OK" : call.error ? call.error.type : "???"}`
                         );
                     })#{@ast.options.useDatadog ? "" : "()"}.catch(err => {
-                        logger.error("Error", null, err);
+                        logger.error("Error", err);
                         if (!res.headersSent)
                             res.writeHead(500);
                         res.end();
