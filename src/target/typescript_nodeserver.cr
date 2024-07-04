@@ -30,6 +30,7 @@ END
 
     unless @ast.options.useRethink
       @io << <<-END
+import { context as ctx } from "../utils/context";
 
 interface DBDevice {
     id: string
@@ -300,7 +301,7 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
 
         let body = "";
         req.on("data", (chunk: any) => body += chunk.toString());
-        req.on("end", #{@ast.options.useDatadog ? "tracer.scope().bind( async ()" : "()"} => {
+        req.on("end", ctx.bind(#{@ast.options.useDatadog ? "tracer.scope().bind( async ()" : "()"} => {
             if (req.method === "OPTIONS") {
                 res.writeHead(200);
                 res.end();
@@ -557,7 +558,7 @@ END
 END
     end
     @io << <<-END
-        })#{@ast.options.useDatadog ? ")" : ""};
+        })#{@ast.options.useDatadog ? ")" : ""});
     });
 
     if ((server as any).keepAliveTimeout)
