@@ -224,15 +224,30 @@ export interface Context {
     startTime: Date;
     staging: boolean;
 }
+    
+export interface LogMethod {
+  (message: string, meta?: LogMeta): void;
+  (log: { message: string } & LogMeta): void;
+}
+
+export interface ErrorMethod {
+  (error: unknown, meta?: LogMeta): void;
+  (message: string, error: unknown, meta?: LogMeta): void;
+}
+
+export type LogLevel = "crit" | "error" | "warn" | "info" | "debug";
+export type ErrorLevel = "crit" | "error";
+export type LogMeta = {
+  message?: never;
+  [K: string]: unknown;
+};
 
 export type Logger = {
-    [K in "warn" | "info" | "debug"]: (
-        message: string,
-        metadata?: object | null
-    ) => void;
+  [K in LogLevel]: LogMethod;
 } & {
-    error: (message: string, metadata?: object | null, error?: unknown) => void;
-    child?: (meta: object) => Logger;
+  [K in ErrorLevel]: ErrorMethod;
+} & {
+  child?: (meta: LogMeta) => Logger;
 };
 
 function fmtMsg(msg: string, meta?: any) {
