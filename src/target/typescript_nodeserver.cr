@@ -373,7 +373,8 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
                             },
                         };
 
-                        const callLogger = logger.child?.(loggerMeta) ?? logger;
+                        ctx.addValues(loggerMeta);
+                        const callLogger = logger;
 
                         request.device.ip = ip;
                         request.device.lastActiveAt = new Date();
