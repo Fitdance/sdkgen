@@ -30,6 +30,7 @@ END
 
     unless @ast.options.useRethink
       @io << <<-END
+import { context as ctx } from "../utils/context";
 
 interface DBDevice {
     id: string
@@ -224,14 +225,29 @@ export interface Context {
     staging: boolean;
 }
 
+export interface LogMethod {
+  (message: string, meta?: LogMeta): void;
+  (log: { message: string } & LogMeta): void;
+}
+
+export interface ErrorMethod {
+  (error: unknown, meta?: LogMeta): void;
+  (message: string, error: unknown, meta?: LogMeta): void;
+}
+
+export type LogLevel = "crit" | "error" | "warn" | "info" | "debug";
+export type ErrorLevel = "crit" | "error";
+export type LogMeta = {
+  message?: never;
+  [K: string]: unknown;
+};
+
 export type Logger = {
-    [K in "warn" | "info" | "debug"]: (
-        message: string,
-        metadata?: object | null
-    ) => void;
+  [K in LogLevel]: LogMethod;
 } & {
-    error: (message: string, metadata?: object | null, error?: unknown) => void;
-    child?: (meta: object) => Logger;
+  [K in ErrorLevel]: ErrorMethod;
+} & {
+  child?: (meta: LogMeta) => Logger;
 };
 
 function fmtMsg(msg: string, meta?: any) {
@@ -242,12 +258,13 @@ function fmtMsg(msg: string, meta?: any) {
         .join(",")}`;
 }
 
-const defaultLogger: Logger = {
-    error: (msg, meta) => console.error(fmtMsg(msg, meta)),
+const defaultLogger = {
+    crit: (msg, meta, _) => console.error(fmtMsg(msg, meta)),
+    error: (msg, meta, _) => console.error(fmtMsg(msg, meta)),
     warn: (msg, meta) => console.warn(fmtMsg(msg, meta)),
     info: (msg, meta) => console.info(fmtMsg(msg, meta)),
     debug: (msg, meta) => console.debug(fmtMsg(msg, meta)),
-};
+} as Logger;
 
 function sleep(ms: number) {
     return new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -285,11 +302,11 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
     if (server) return;
     server = http.createServer((req, res) => {
         req.on("error", (err) => {
-            logger.error("Error", null, err);
+            logger.error("Error", err);
         });
 
         res.on("error", (err) => {
-            logger.error("Error", null, err);
+            logger.error("Error", err);
         });
 
         res.setHeader("Access-Control-Allow-Origin", "*");
@@ -300,7 +317,7 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
 
         let body = "";
         req.on("data", (chunk: any) => body += chunk.toString());
-        req.on("end", #{@ast.options.useDatadog ? "tracer.scope().bind( async ()" : "()"} => {
+        req.on("end", ctx.bind(#{@ast.options.useDatadog ? "tracer.scope().bind( async ()" : "()"} => {
             if (req.method === "OPTIONS") {
                 res.writeHead(200);
                 res.end();
@@ -333,7 +350,7 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
                         res.write(JSON.stringify({ok}));
                         res.end();
                     }, error => {
-                        logger.error("Error", null, error);
+                        logger.error("Error", error);
                         res.writeHead(500);
                         res.write(JSON.stringify({ok: false}));
                         res.end();
@@ -356,7 +373,8 @@ export function start(port: number = 8000, logger: Logger = defaultLogger) {
                             },
                         };
 
-                        const callLogger = logger.child?.(loggerMeta) ?? logger;
+                        ctx.addValues(loggerMeta);
+                        const callLogger = logger;
 
                         request.device.ip = ip;
                         request.device.lastActiveAt = new Date();
@@ -472,7 +490,7 @@ END
                                     throw "Function does not exist: " + request.name;
                                 }
                             } catch (err) {
-                                callLogger.error(`Error on ${request.name}`, null, err);
+                                callLogger.error(`Error on ${request.name}`, err);
                                 call.ok = false;
                                 if (#{@ast.errors.to_json}.includes(err?._type)) {
                                     call.error = {
@@ -533,7 +551,7 @@ END
                             `${call.name}() -> ${call.ok ? "OK" : call.error ? call.error.type : "???"}`
                         );
                     })#{@ast.options.useDatadog ? "" : "()"}.catch(err => {
-                        logger.error("Error", null, err);
+                        logger.error("Error", err);
                         if (!res.headersSent)
                             res.writeHead(500);
                         res.end();
@@ -557,7 +575,7 @@ END
 END
     end
     @io << <<-END
-        })#{@ast.options.useDatadog ? ")" : ""};
+        })#{@ast.options.useDatadog ? ")" : ""});
     });
 
     if ((server as any).keepAliveTimeout)
