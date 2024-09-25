@@ -464,12 +464,12 @@ END
 
                         if (call.running) {
                         #{@ast.options.useDatadog ? "await tracer.trace('sdkgen.fn', async () => {" : ""}
+                        #{@ast.options.useDatadog ? "const span = tracer.scope()?.active();" : ""}
                             try {
 
 END
     if @ast.options.useDatadog
         @io << <<-END
-                                const span = tracer.scope().active();
                                 span?.setTag('resource.name', call.name);
 
                                 if (!!call.id) span?.setTag('sdkgen.call.id', call.id);
@@ -502,7 +502,7 @@ END
     if @ast.options.useDatadog
         @io << <<-END
                                     if (err._type === 'NotLoggedIn') {
-                                        tracer.scope().active().addTags({
+                                        span?.addTags({
                                             error: null,
                                             issue: null,
                                         });
