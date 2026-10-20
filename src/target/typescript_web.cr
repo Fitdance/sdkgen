@@ -16,6 +16,12 @@ export function setBaseUrl(url: string) {
   baseUrl = url;
 }
 
+let authTokenProvider: (renew: boolean) => Promise<string | null> | string | null = () => null;
+
+export function setAuthTokenProvider(provider: (renew: boolean) => Promise<string | null> | string | null) {
+  authTokenProvider = provider;
+}
+
 END
 
     @ast.struct_types.each do |t|
@@ -127,11 +133,13 @@ export function removeEventListener(listenable: Listenables, hook: ListenerTypes
   listenersDict[listenable] = listeners.filter(h => h !== hook) as any;
 }
 
-async function makeRequest({name, args}: {name: string, args: any}) {
+async function makeRequest({name, args}: {name: string, args: any}, renewedToken?: string): Promise<any> {
   const deviceData = await device();
+  const token = renewedToken || await authTokenProvider(false);
   return new Promise<any>((resolve, reject) => {
     const req = new XMLHttpRequest();
     req.open("POST", (baseUrl.startsWith("http") ? "" : "https://") + baseUrl + "/" + name);
+    if (token) req.setRequestHeader("Authorization", "Bearer " + token);
     const body = {
       id: randomBytesHex(8),
       device: deviceData,
@@ -148,6 +156,8 @@ async function makeRequest({name, args}: {name: string, args: any}) {
           if (response.ok) {
             resolve(response.result);
             listenersDict["success"].forEach(hook => hook(response.result, name, args));
+          } else if (token && !renewedToken && response.error.type === "NotLoggedIn") {
+            resolve(Promise.resolve(authTokenProvider(true)).then(renewed => renewed ? makeRequest({name, args}, renewed) : Promise.reject(response.error)));
           } else {
             reject(response.error);
             listenersDict["fail"].forEach(hook => hook(response.error, name, args));
